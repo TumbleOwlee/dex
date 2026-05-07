@@ -4,7 +4,7 @@
 > This project was started by me to create a tool that can handle the execution of commands transparently inside a persistent Docker container, and that can be customized using a layer of configuration files to run a chain of commands by a simple alias.
 
 > [!CAUTION]
-> This project is a test run utilizing the LLM capabilities of current tools. Thus, it may contain bugs or may break. Use it with caution and **only** in a safe development environment. It's not advised to depend on it in any critical role. Additionally the README may or may not be generated an updated solely by the LLM.
+> This project is a test run utilizing the LLM capabilities of current tools. Thus, it may contain bugs or may break. Use it with caution and **only** in a safe development environment. It's not advised to depend on it in any critical role. Additionally the README may or may not be generated and updated solely by the LLM.
 
 Run commands transparently inside a **persistent Docker container** without thinking about container lifecycle. The git repository root is automatically mounted as `/workspace`; your current working directory is translated to the equivalent path inside the container so every command behaves as if it runs locally.
 
