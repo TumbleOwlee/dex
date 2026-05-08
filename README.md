@@ -295,7 +295,7 @@ dex -e 'TOKEN=$(cat ~/.token)' build  # command substitution works too
 
 ## Dockerfile-based images
 
-Instead of pulling a pre-built image you can point to a local Dockerfile. The script builds the image automatically on first use and tags it as `dex-<project-slug>-<profile-slug>:local`.
+Instead of pulling a pre-built image you can point to a local Dockerfile. The script builds the image automatically on first use and tags it as `dex-<dockerfile-slug>:local`, where the slug is derived from the absolute path of the Dockerfile. Projects that share the same Dockerfile therefore share the same image — no redundant rebuilds or duplicate images.
 
 ```ini
 # In a profile or [project] section:
@@ -368,7 +368,9 @@ The output shows, for each alias: the command, working directory, alias-level en
 | `-e`, `--env <spec>` | Inject extra environment variables for this invocation only (highest priority, overrides config). Accepts comma-separated specs (`KEY=val,OTHER=val`) and may be repeated (`-e KEY=val -e OTHER=val`). Supports the same forms as the `env` config key: plain pass-through (`KEY`), fixed value (`KEY=val`), and command substitution (`KEY=$(cmd)`). |
 | `-I`, `--interactive` | Force all commands to run with a TTY (`docker exec -it`). |
 | `-r`, `--restart` | Remove and recreate the container before running. Applies updated port mappings and other creation-time settings. |
-| `-b`, `--rebuild` | Force a rebuild of the Docker image (requires `dockerfile` in config). |
+| `-b`, `--rebuild` | Force a rebuild of the Docker image (requires `dockerfile` in config). Can be used without a command to rebuild the image only (e.g. `dex -b`). |
+| `-s`, `--stop` | Stop and remove the current project's container. |
+| `-S`, `--stop-all` | Stop and remove **all** dex-managed containers (any container whose name starts with `dex-`). Does not require a git repository. |
 
 ---
 

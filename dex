@@ -949,6 +949,9 @@ show_help() {
     printf "                           ${DIM}(applies updated port mappings and other creation-time settings)${R}\n"
     printf "  ${YL}-b${R}, ${YL}--rebuild${R}            Force rebuild of the Docker image\n"
     printf "                           ${DIM}(requires dockerfile in project config or profile)${R}\n"
+    printf "                           ${DIM}Can be used without a command to rebuild only${R}\n"
+    printf "  ${YL}-s${R}, ${YL}--stop${R}               Stop and remove the current project's container\n"
+    printf "  ${YL}-S${R}, ${YL}--stop-all${R}           Stop and remove ALL dex-managed containers\n"
 
     printf "\n${CY}Configuration${R}\n"
     printf "  Config files are loaded in priority order (highest wins):\n"
@@ -1007,7 +1010,10 @@ show_help() {
     printf "  ${YL}%s -e JOBS=8 build${R}      ${DIM}# Pass an extra env var to the 'build' alias${R}\n" "$SCRIPT_NAME"
     printf "  ${YL}%s -e A=1 -e B=2 build${R}  ${DIM}# Multiple env vars${R}\n" "$SCRIPT_NAME"
     printf "  ${YL}%s -b -r build${R}          ${DIM}# Rebuild image AND recreate container, then build${R}\n" "$SCRIPT_NAME"
+    printf "  ${YL}%s -b${R}                   ${DIM}# Rebuild image only (no command)${R}\n" "$SCRIPT_NAME"
     printf "  ${YL}%s -r build${R}             ${DIM}# Recreate container (e.g. after changing ports)${R}\n" "$SCRIPT_NAME"
+    printf "  ${YL}%s -s${R}                   ${DIM}# Stop the current project's container${R}\n" "$SCRIPT_NAME"
+    printf "  ${YL}%s -S${R}                   ${DIM}# Stop all dex-managed containers${R}\n" "$SCRIPT_NAME"
 
     printf "\n${DIM}Config file format: see dex.conf.example and dex.d/example.conf${R}\n\n"
 }
@@ -1024,6 +1030,7 @@ find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'dex.*.log' -mmin +3 \
 FORCE_REBUILD=0
 FORCE_RESTART=0
 FORCE_STOP=0
+STOP_ALL=0
 LIST_ALIASES=0
 PROFILE_OVERRIDE=""
 INTERACTIVE=0
@@ -1045,6 +1052,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -s | --stop)
             FORCE_STOP=1
+            shift
+            ;;
+        -S | --stop-all)
+            STOP_ALL=1
             shift
             ;;
         -l | --list)
@@ -1084,10 +1095,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ $# -eq 0 && "$LIST_ALIASES" != "1" && "$FORCE_STOP" != "1" ]] && {
+[[ $# -eq 0 && "$LIST_ALIASES" != "1" && "$FORCE_STOP" != "1" && "$FORCE_REBUILD" != "1" && "$STOP_ALL" != "1" ]] && {
     show_help
     exit 0
 }
+
+# ── Stop all dex-managed containers (--stop-all / -S) ────────────────────────
+# Handled before git root detection: no repo context needed.
+if [[ "$STOP_ALL" == "1" ]]; then
+    _dex_containers=()
+    while IFS= read -r _cname; do
+        [[ "$_cname" == dex-* ]] && _dex_containers+=("$_cname")
+    done < <(docker ps -a --filter "name=dex-" --format "{{.Names}}" 2>/dev/null || true)
+    if [[ ${#_dex_containers[@]} -eq 0 ]]; then
+        info "No dex-managed containers found."
+    else
+        for _cname in "${_dex_containers[@]}"; do
+            info "Removing container '${_CDIM}${_cname}${_CR}' ..."
+            docker rm -f "$_cname" >/dev/null
+        done
+    fi
+    unset _dex_containers _cname
+    exit 0
+fi
 
 # ── Git root detection (supports normal repos and worktrees) ──────────────────
 GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"  ||
@@ -1134,13 +1164,13 @@ FINAL_IMAGE=""
 # Prefer PROJECT_DOCKERFILE (from [project] section) over PROFILE_DOCKERFILE.
 EFFECTIVE_DOCKERFILE="${PROJECT_DOCKERFILE:-$PROFILE_DOCKERFILE}"
 if [[ -n "$EFFECTIVE_DOCKERFILE" ]]; then
-    # Dockerfile-built image: tag derived from git root + profile so each profile
-    # can have its own image when different dockerfiles are in play.
-    _slug="$(printf '%s' "$GIT_ROOT" |
+    # Dockerfile-built image: tag derived from the Dockerfile path so that all
+    # projects sharing the same Dockerfile reuse the same image.
+    _slug="$(printf '%s' "$EFFECTIVE_DOCKERFILE" |
         tr '[:upper:]' '[:lower:]' |
         tr -cs 'a-z0-9' '-' |
         sed 's/^-\+//;s/-\+$//')"
-    FINAL_IMAGE="dex-${_slug}-${_profile_slug}:local"
+    FINAL_IMAGE="dex-${_slug}:local"
     unset _slug
 fi
 [[ -z "$FINAL_IMAGE" && -n "$PROJECT_IMAGE" ]] && FINAL_IMAGE="$PROJECT_IMAGE"
@@ -1178,6 +1208,11 @@ fi
 
 # ── Ensure image and container are ready ──────────────────────────────────────
 ensure_image "$FINAL_IMAGE" "$EFFECTIVE_DOCKERFILE" "$FORCE_REBUILD"
+
+# If no alias or command was given (e.g. bare `dex -b`), the image step is all
+# that was needed — skip container creation/start entirely.
+[[ "$USE_ALIAS" == "0" && $# -eq 0 ]] && exit 0
+
 ensure_container "$CONTAINER_NAME" "$FINAL_IMAGE" "$GIT_ROOT" "$PROFILE_PORTS" "$FORCE_RESTART" "$FORCE_STOP"
 
 # ── Helper: set globals for one step alias and print its summary ──────────────
