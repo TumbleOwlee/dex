@@ -678,7 +678,7 @@ run_exec_step() {
         local _exit=0
         if [[ "$USE_ALIAS" == "1" ]]; then
             docker exec -it -w "$EXEC_WORKDIR" "${ENV_FLAGS[@]}" "$CONTAINER_NAME" \
-                sh -c "$EXEC_CMD" || _exit=$?
+                sh -c "$EXEC_CMD ${EXEC_ARGS[@]}" || _exit=$?
         else
             docker exec -it -w "$EXEC_WORKDIR" "${ENV_FLAGS[@]}" "$CONTAINER_NAME" \
                 "${EXEC_ARGS[@]}" || _exit=$?
@@ -720,7 +720,7 @@ run_exec_step() {
 
         if [[ "$USE_ALIAS" == "1" ]]; then
             docker exec -w "$EXEC_WORKDIR" "${ENV_FLAGS[@]}" "$CONTAINER_NAME" \
-                sh -c "$EXEC_CMD" >"$_tmpfifo"  2>&1 &
+                sh -c "$EXEC_CMD ${EXEC_ARGS[@]}" >"$_tmpfifo"  2>&1 &
         else
             docker exec -w "$EXEC_WORKDIR" "${ENV_FLAGS[@]}" "$CONTAINER_NAME" \
                 "${EXEC_ARGS[@]}" >"$_tmpfifo"  2>&1 &
@@ -1248,7 +1248,7 @@ _setup_step() {
     if [[ -n "$pipeline_label" ]]; then
         DISPLAY_CMD="[${pipeline_label}:${step_alias}] → ${EXEC_CMD}"
     else
-        DISPLAY_CMD="[${step_alias}] → ${EXEC_CMD}"
+        DISPLAY_CMD="[${step_alias}] → ${EXEC_CMD} ${EXEC_ARGS[@]}"
     fi
     local _aenv="${ALIAS_ENV[$step_alias]-}"
     COMBINED_ENV="$PROFILE_ENV"
@@ -1284,6 +1284,8 @@ if [[ "$USE_ALIAS" == "1" && -n "${ALIAS_PIPELINE[$ALIAS_NAME]-}" ]]; then
 
 elif [[ "$USE_ALIAS" == "1" ]]; then
     # Single alias step.
+    shift 1
+    EXEC_ARGS=("$@")
     _setup_step "$ALIAS_NAME"
     run_exec_step "$_run_logfile" || _overall_exit=$?
 
