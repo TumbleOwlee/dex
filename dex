@@ -905,7 +905,6 @@ desc = Run tests.
 cmd = cmake --build ${BUILD_DIR} --target test -j$JOBS
 env = BUILD_DIR=./build
 user = $(id -u):$(id -g)
-interactive = false
 
 [alias:ci]
 desc = Run pipeline.
