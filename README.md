@@ -114,6 +114,8 @@ desc        = Build project.
 cmd         = cmake --build /workspace/build
 workdir     = /workspace/build
 env         = JOBS=4
+user        = 1000:1000
+# or: user = $(id -u):$(id -g)
 interactive = false
 
 [alias:shell]
@@ -127,6 +129,7 @@ interactive = true
 | `cmd` | Command to run inside the container. Required for non-pipeline aliases. |
 | `workdir` | Working directory inside the container. Defaults to `/workspace`. Supports command substitution: `workdir = /workspace/$(git branch --show-current)`. |
 | `env` | Alias-level environment variables (see [Environment variables in config](#environment-variables-in-config)). These are merged on top of the profile-level env. |
+| `user` | Overwrite default user of container. Useful to access directories in `/workspace` created by alias execution. |
 | `interactive` | Set to `true` to always run with a TTY (`docker exec -it`), even inside a pipeline. |
 | `hidden` | Set to `true` to make this alias internal-only: it is excluded from `--list` output and cannot be invoked directly. Hidden aliases can still be used as steps inside a pipeline. |
 
