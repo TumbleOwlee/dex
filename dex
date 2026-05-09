@@ -848,8 +848,8 @@ generate_new() {
     [[ ! -f "${GIT_ROOT}/.dex.conf" ]] || die "'${_CYL}${GIT_ROOT}/.dex.conf${_CR}' already exists."
 
     printf \
-'[project]
-profile = default' > "${GIT_ROOT}/.dex.conf"
+        '[project]
+profile = default' >"${GIT_ROOT}/.dex.conf"
 
     if [[ -z "$_tmpl" ]]; then
         printf '
@@ -860,7 +860,7 @@ image = alpine:latest
 [alias:shell]
 desc = Run shell.
 cmd = /bin/sh
-interactive = true' >> "${GIT_ROOT}/.dex.conf"
+interactive = true' >>"${GIT_ROOT}/.dex.conf"
     elif [[ "$_tmpl" = "cmake" ]]; then
         # Create directory if missing
         if [[ ! -d "${GIT_ROOT}/.dex" ]]; then
@@ -891,14 +891,14 @@ interactive = false
 
 [alias:ci]
 desc = Run pipeline.
-pipeline = configure,build,test' >> "${GIT_ROOT}/.dex.conf"
+pipeline = configure,build,test' >>"${GIT_ROOT}/.dex.conf"
 
         # Generate dockerfile
         if [[ ! -f "${GIT_ROOT}/.dex/cmake.Dockerfile" ]]; then
             printf \
-'FROM debian:bookworm-slim
+                'FROM debian:bookworm-slim
 # Install dependencies
-RUN apt-get update && apt-get install -y cmake build-essential ninja-build && apt-get clean' > "${GIT_ROOT}/.dex/cmake.Dockerfile"
+RUN apt-get update && apt-get install -y cmake build-essential ninja-build && apt-get clean' >"${GIT_ROOT}/.dex/cmake.Dockerfile"
         else
             warn "'${_CYL}${GIT_ROOT}/.dex/cmake.Dockerfile${_CR}' already exists."
         fi
