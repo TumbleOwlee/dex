@@ -914,7 +914,7 @@ pipeline = configure,build,test' >>"${GIT_ROOT}/.dex.conf"
         # Generate dockerfile
         if [[ ! -f "${GIT_ROOT}/.dex/cmake.Dockerfile" ]]; then
             printf \
-'FROM debian:trixie-slim
+                'FROM debian:trixie-slim
 # Install dependencies
 RUN apt-get update && apt-get install -y cmake build-essential ninja-build && apt-get clean' >"${GIT_ROOT}/.dex/cmake.Dockerfile"
         else
