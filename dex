@@ -14,17 +14,42 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}")"  && pwd)"
 
-# Resolve global config: prefer $HOME, fall back to $HOME/.local/share
-if [[ -f "${HOME}/.dex.conf" ]]; then
+# ── In-container detection ────────────────────────────────────────────────────
+# When dex is run inside a dex-managed container it should bypass Docker and
+# execute commands directly.  Detection is dual-layer:
+#   1. /run/dex/profile — a host-side file bind-mounted read-only at container
+#      creation time; works even for shells started with raw docker exec.
+#   2. DEX_CONTAINER_PROFILE env var — injected by dex into every docker exec
+#      call; available in shells started through dex.
+DEX_DIRECT_MODE=0
+DEX_CONTAINER_PROFILE="${DEX_CONTAINER_PROFILE:-}"
+if [[ -f /run/dex/profile ]]; then
+    DEX_DIRECT_MODE=1
+    [[ -z "$DEX_CONTAINER_PROFILE" ]] && DEX_CONTAINER_PROFILE="$(cat /run/dex/profile)"
+    export DEX_CONTAINER_PROFILE
+elif [[ -n "$DEX_CONTAINER_PROFILE" ]]; then
+    DEX_DIRECT_MODE=1
+fi
+readonly DEX_DIRECT_MODE
+
+# Resolve global config: prefer $HOME, fall back to $HOME/.local/share.
+# When running inside a dex container, use the bind-mounted host config instead.
+if [[ "$DEX_DIRECT_MODE" == "1" && -f /run/dex/global.conf ]]; then
+    GLOBAL_CONFIG="/run/dex/global.conf"
+elif [[ -f "${HOME}/.dex.conf" ]]; then
     GLOBAL_CONFIG="${HOME}/.dex.conf"
 else
     GLOBAL_CONFIG="${HOME}/.local/share/.dex.conf"
 fi
 readonly GLOBAL_CONFIG
 
-# Resolve project config dir: prefer $HOME, fall back to $HOME/.local/share
-if [[ -d "${HOME}/.dex.d" ]]; then
+# Resolve project config dir: prefer $HOME, fall back to $HOME/.local/share.
+# When running inside a dex container, use the bind-mounted host dir instead.
+if [[ "$DEX_DIRECT_MODE" == "1" && -d /run/dex/project.d ]]; then
+    PROJECT_CONFIG_DIR="/run/dex/project.d"
+elif [[ -d "${HOME}/.dex.d" ]]; then
     PROJECT_CONFIG_DIR="${HOME}/.dex.d"
 else
     PROJECT_CONFIG_DIR="${HOME}/.local/share/.dex.d"
@@ -390,6 +415,12 @@ _apply_combined_env() {
         ENV_DISPLAY+="${ENV_FLAGS[$_i]}, "
     done
     ENV_DISPLAY="${ENV_DISPLAY%, }"
+    # Inject the container-profile marker into every docker exec call so that
+    # dex can detect when it is run inside the container.  Appended after
+    # ENV_DISPLAY is built so the marker does not appear in -l or summary output.
+    if [[ "$DEX_DIRECT_MODE" != "1" ]]; then
+        ENV_FLAGS+=("-e" "DEX_CONTAINER_PROFILE=${PROFILE_NAME:-}")
+    fi
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -461,6 +492,21 @@ ensure_container() {
         done
     fi
 
+    # Build config bind-mount flags: global config and project config dir are
+    # mounted read-only at fixed paths so dex can find them inside the container.
+    local -a _cfg_mounts=()
+    # Host-side marker file: written before docker run so the container always
+    # has a readable /run/dex/profile regardless of the container's user.
+    local _marker_file="${TMPDIR:-/tmp}/.dex-${container}-profile"
+    printf '%s' "$PROFILE_NAME" >"$_marker_file"
+    _cfg_mounts+=("-v" "${_marker_file}:/run/dex/profile:ro")
+    if [[ -f "$GLOBAL_CONFIG" ]]; then
+        _cfg_mounts+=("-v" "${GLOBAL_CONFIG}:/run/dex/global.conf:ro")
+    fi
+    if [[ -d "$PROJECT_CONFIG_DIR" ]]; then
+        _cfg_mounts+=("-v" "${PROJECT_CONFIG_DIR}:/run/dex/project.d:ro")
+    fi
+
     if [[ "$force_stop" == "1" ]]; then
         if docker container inspect "$container" &>/dev/null; then
             info "Removing container '${_CDIM}${container}${_CR}' ..."
@@ -489,7 +535,9 @@ ensure_container() {
         info "Creating container '${_CDIM}${container}${_CR}' from image '${_CYL}${image}${_CR}' ..."
         docker run -d \
             --name "$container" \
+            -v "${SCRIPT_DIR}/${SCRIPT_NAME}:/bin/dex" \
             -v "${git_root}:${CONTAINER_MOUNT}" \
+            "${_cfg_mounts[@]}" \
             "${_port_flags[@]}" \
             "$image" \
             sleep infinity >/dev/null
@@ -708,6 +756,73 @@ run_exec_step() {
     local -a _user_flag=()
     [[ -n "$EXEC_USER" ]] && _user_flag=("--user" "$EXEC_USER")
 
+    # ── Direct execution (inside a dex-managed container) ─────────────────────
+    if [[ "$DEX_DIRECT_MODE" == "1" ]]; then
+        # Build a plain KEY=VAL array from ENV_FLAGS (odd indices hold "KEY=VAL").
+        local -a _direct_env=()
+        local _ei
+        for ((_ei = 1; _ei < ${#ENV_FLAGS[@]}; _ei += 2)); do
+            _direct_env+=("${ENV_FLAGS[$_ei]}")
+        done
+
+        if [[ "$STEP_INTERACTIVE" == "1" ]]; then
+            local _sig="" _exit=0
+            trap '_sig=INT' INT
+            if [[ "$USE_ALIAS" == "1" ]]; then
+                (cd "$EXEC_WORKDIR" && env "${_direct_env[@]}" sh -c "$EXEC_CMD") || _exit=$?
+            else
+                (cd "$EXEC_WORKDIR" && env "${_direct_env[@]}" "${EXEC_ARGS[@]}") || _exit=$?
+            fi
+            trap - INT
+            if [[ -n "$_sig" && "$_exit" -lt 128 ]]; then _exit=130; fi
+            [[ -n "$_sig" ]] && _STEP_SIG_RECEIVED="$_sig"
+            print_footer "$_exit" "$(($(_now_ms) - _step_start_ms))"
+            return "$_exit"
+        else
+            local _tmpfifo _cmd_pid _sig="" _exit=0
+            _tmpfifo="$(mktemp -u)"
+            mkfifo "$_tmpfifo"
+            _active_tmpfifo="$_tmpfifo"
+            if [[ -z "$_logfile" ]]; then
+                _logfile="$(mktemp -t dex.XXXXXX)"
+            fi
+            {
+                printf '=%.0s' {1..80}
+                                        printf '\n'
+                printf 'Command   : %s\n' "$DISPLAY_CMD"
+                printf 'Directory : %s\n' "$EXEC_WORKDIR"
+                [[ -n "$ENV_DISPLAY" ]] && printf 'Env       : %s\n' "$ENV_DISPLAY"
+                printf '=%.0s' {1..80}
+                                        printf '\n'
+            } >>"$_logfile"
+            if [[ "$USE_ALIAS" == "1" ]]; then
+                (cd "$EXEC_WORKDIR" && env "${_direct_env[@]}" sh -c "$EXEC_CMD") >"$_tmpfifo" 2>&1 &
+            else
+                (cd "$EXEC_WORKDIR" && env "${_direct_env[@]}" "${EXEC_ARGS[@]}") >"$_tmpfifo" 2>&1 &
+            fi
+            _cmd_pid=$!
+            _kill_step() {
+                           local sig="$1"
+                                           _sig="$sig"
+                                                        kill -"$sig" "$_cmd_pid" 2>/dev/null || true
+            }
+            trap '_kill_step INT' INT
+            trap '_kill_step TERM' TERM
+            _rolling_display 10 "$_logfile" <"$_tmpfifo" || true
+            wait "$_cmd_pid" || _exit=$?
+            trap - INT TERM
+            if [[ -n "$_sig" && "$_exit" -lt 128 ]]; then
+                case "$_sig" in INT) _exit=130 ;; TERM) _exit=143 ;; esac
+            fi
+            [[ -n "$_sig" ]] && _STEP_SIG_RECEIVED="$_sig"
+            print_footer "$_exit" "$(($(_now_ms) - _step_start_ms))" "$_logfile"
+            rm -f "$_tmpfifo" 2>/dev/null || true
+            _active_tmpfifo=""
+            return "$_exit"
+        fi
+    fi
+
+    # ── Docker exec (normal mode) ─────────────────────────────────────────────
     if [[ "$STEP_INTERACTIVE" == "1" ]]; then
         # Interactive: foreground docker exec; trap INT to prevent bash's default
         # re-raise (which would kill the script before print_footer runs).
@@ -742,7 +857,7 @@ run_exec_step() {
         # Use the provided logfile or create a fresh one for this step.
         # Logfiles are NOT removed so the user can inspect them after failure.
         if [[ -z "$_logfile" ]]; then
-            _logfile="$(mktemp -t dex.XXXXXX.log)"
+            _logfile="$(mktemp -t dex.XXXXXX)"
         fi
 
         # Write a plain-text step header to the logfile (no ANSI codes) so that
@@ -1001,9 +1116,10 @@ list_aliases() {
             [[ "$_first" == "1" ]] && _first=0 || printf "${RD}   │${R}\n"
 
             if [[ -n "${ALIAS_PIPELINE[$_n]-}" ]]; then
-                # Pipeline alias: show steps as a chain.
+                # Pipeline alias: show steps as a chain, then per-step env vars.
+                local _pipeline_val="${ALIAS_PIPELINE[$_n]}"
                 local _steps_fmt
-                _steps_fmt="$(printf '%s' "${ALIAS_PIPELINE[$_n]}" |
+                _steps_fmt="$(printf '%s' "$_pipeline_val" |
                     sed 's/[[:space:]]*,[[:space:]]*/  →  /g')"
                 local _desc="${ALIAS_DESC[$_n]-}"
 
@@ -1011,12 +1127,32 @@ list_aliases() {
                     local _meta="${YL}${_desc}${R}    "
                     printf "${RD}   │${R}  ${MG}%-${_length}s${R} %-8s %s\n" "$_n" "desc:" "$_meta"
                     _n=""
-                    printf "${RD}   │${R}  ${MG}%-${_length}s${R} ${MG}[pipeline]${R}  %s\n" \
+                    printf "${RD}   │${R}  ${MG}%-${_length}s${R} ${MG}[pipeline]${R}  ${RD}%s${R}\n" \
                         "" "$_steps_fmt"
                 else
-                    printf "${RD}   │${R}  ${MG}%-${_length}s${R} ${MG}[pipeline]${R}  %s\n" \
+                    printf "${RD}   │${R}  ${MG}%-${_length}s${R} ${MG}[pipeline]${R}  ${RD}%s${R}\n" \
                         "$_n" "$_steps_fmt"
                 fi
+
+                # Show effective env for each step that has any env configured.
+                local _step _step_env _combined_step_env
+                local IFS_orig="$IFS"
+                IFS=','
+                for _step in $_pipeline_val; do
+                    IFS="$IFS_orig"
+                    _step="${_step// /}" # trim whitespace
+                    [[ -z "$_step" ]] && continue
+                    _step_env="${ALIAS_ENV[$_step]-}"
+                    # Build combined env: profile base + step-specific env.
+                    _combined_step_env="$PROFILE_ENV"
+                    [[ -n "$_step_env" ]] && _combined_step_env="${_combined_step_env}${_combined_step_env:+,}${_step_env}"
+                    if [[ -n "$_combined_step_env" ]]; then
+                        printf "${RD}   │${R}  %-${_length}s %-8s ${CY}%-14s${R} ${YLN}%s${R}\n" \
+                            "" "env:" "$_step:" "$_combined_step_env"
+                    fi
+                    IFS=','
+                done
+                IFS="$IFS_orig"
             else
                 # Regular alias: name + command, then optional metadata line.
                 local _cmd="${ALIAS_CMD[$_n]}"
@@ -1278,8 +1414,9 @@ find_repo_config "$GIT_ROOT"
 find_project_config "$GIT_ROOT"
 
 # ── Profile name resolution ───────────────────────────────────────────────────
-# Default is "default"; repo config can suggest a different default; local
-# project config can override that; -p / --profile overrides everything.
+# Default is "default"; when inside a dex container DEX_CONTAINER_PROFILE
+# overrides that; repo config can suggest a different default; local project
+# config can override that; -p / --profile overrides everything.
 PROFILE_NAME="default"
 if [[ -n "$REPO_CONFIG" ]]; then
     _p="$(ini_get "$REPO_CONFIG" "project" "profile")"
@@ -1291,7 +1428,11 @@ if [[ -n "$PROJECT_FILE" ]]; then
     [[ -n "$_p" ]] && PROFILE_NAME="$_p"
     unset _p
 fi
+if [[ "$DEX_DIRECT_MODE" == "1" && -n "$DEX_CONTAINER_PROFILE" ]]; then
+    PROFILE_NAME="$DEX_CONTAINER_PROFILE"
+fi
 [[ -n "$PROFILE_OVERRIDE" ]] && PROFILE_NAME="$PROFILE_OVERRIDE"
+DEX_CONTAINER_PROFILE="$PROFILE_NAME"
 
 # ── Load profile, then overlay project settings ───────────────────────────────
 load_profile "$PROFILE_NAME"
@@ -1351,13 +1492,21 @@ if [[ "$LIST_ALIASES" == "1" ]]; then
 fi
 
 # ── Ensure image and container are ready ──────────────────────────────────────
-ensure_image "$FINAL_IMAGE" "$EFFECTIVE_DOCKERFILE" "$FORCE_REBUILD"
+# Skipped when running inside a dex container (direct mode).
+if [[ "$DEX_DIRECT_MODE" != "1" ]]; then
+    ensure_image "$FINAL_IMAGE" "$EFFECTIVE_DOCKERFILE" "$FORCE_REBUILD"
 
-# If no alias or command was given (e.g. bare `dex -b`), the image step is all
-# that was needed — skip container creation/start entirely.
-[[ "$USE_ALIAS" == "0" && $# -eq 0 ]] && exit 0
+    # If no alias or command was given (e.g. bare `dex -b`), the image step is all
+    # that was needed — skip container creation/start entirely.
+    [[ "$USE_ALIAS" == "0" && $# -eq 0 ]] && exit 0
 
-ensure_container "$CONTAINER_NAME" "$FINAL_IMAGE" "$GIT_ROOT" "$PROFILE_PORTS" "$FORCE_RESTART" "$FORCE_STOP"
+    ensure_container "$CONTAINER_NAME" "$FINAL_IMAGE" "$GIT_ROOT" "$PROFILE_PORTS" "$FORCE_RESTART" "$FORCE_STOP"
+else
+    # In direct mode, -b and -r have no effect.
+    [[ "$FORCE_REBUILD" == "1" ]] && warn "--rebuild has no effect inside a dex container."
+    [[ "$FORCE_RESTART" == "1" ]] && warn "--restart has no effect inside a dex container."
+    [[ "$USE_ALIAS" == "0" && $# -eq 0 ]] && exit 0
+fi
 
 # ── Helper: set globals for one step alias and print its summary ──────────────
 _setup_step() {
@@ -1405,7 +1554,7 @@ _overall_exit=0
 # Create a single logfile for the entire invocation (shared across pipeline steps).
 # Interactive steps skip writing to it, but non-interactive steps in the same
 # pipeline still use it for capture.
-_run_logfile="$(mktemp -t dex.XXXXXX.log)"
+_run_logfile="$(mktemp -t dex.XXXXXX)"
 
 if [[ "$USE_ALIAS" == "1" && -n "${ALIAS_PIPELINE[$ALIAS_NAME]-}" ]]; then
     # Pipeline alias: run each referenced step alias in order, fail-fast.
