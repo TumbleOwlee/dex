@@ -1077,15 +1077,24 @@ list_profiles() {
 
     # Build ordered list of source files and their display labels.
     local -a _src_files=() _src_labels=()
-    [[ -f "$GLOBAL_CONFIG" ]] && { _src_files+=("$GLOBAL_CONFIG"); _src_labels+=("Global"); }
-    [[ -n "$REPO_CONFIG" ]] && { _src_files+=("$REPO_CONFIG"); _src_labels+=("Repo"); }
-    [[ -n "$PROJECT_FILE" ]] && { _src_files+=("$PROJECT_FILE"); _src_labels+=("Local"); }
+    [[ -f "$GLOBAL_CONFIG" ]] && {
+                                   _src_files+=("$GLOBAL_CONFIG")
+                                                                   _src_labels+=("Global")
+    }
+    [[ -n "$REPO_CONFIG" ]] && {
+                                 _src_files+=("$REPO_CONFIG")
+                                                               _src_labels+=("Repo")
+    }
+    [[ -n "$PROJECT_FILE" ]] && {
+                                  _src_files+=("$PROJECT_FILE")
+                                                                 _src_labels+=("Local")
+    }
 
     # Collect all profile sections from all files.
     # A section is a profile if it is not 'project' and does not start with 'alias:'.
     local -A _profile_sources=()  # profile_name -> "Global, Repo, ..." label string
     local _i _file _label _section
-    for (( _i = 0; _i < ${#_src_files[@]}; _i++ )); do
+    for ((_i = 0; _i < ${#_src_files[@]}; _i++)); do
         _file="${_src_files[$_i]}"
         _label="${_src_labels[$_i]}"
         while IFS= read -r _section; do
@@ -1114,7 +1123,7 @@ list_profiles() {
 
             # Resolve merged values for this profile (lowest→highest priority).
             local _img="" _env="" _ports="" _dockerfile="" _v
-            for (( _i = 0; _i < ${#_src_files[@]}; _i++ )); do
+            for ((_i = 0; _i < ${#_src_files[@]}; _i++)); do
                 _file="${_src_files[$_i]}"
                 ini_has_section "$_file" "$_n" || continue
                 _v="$(ini_get "$_file" "$_n" "image")"
