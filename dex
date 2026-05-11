@@ -25,10 +25,13 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}")"  && pwd)"
 #      call; available in shells started through dex.
 DEX_DIRECT_MODE=0
 DEX_CONTAINER_PROFILE="${DEX_CONTAINER_PROFILE:-}"
+DEX_CONTAINER_GITROOT="${DEX_CONTAINER_GITROOT:-}"
 if [[ -f /run/dex/profile ]]; then
     DEX_DIRECT_MODE=1
-    [[ -z "$DEX_CONTAINER_PROFILE" ]] && DEX_CONTAINER_PROFILE="$(cat /run/dex/profile)"
+    [[ -z "$DEX_CONTAINER_PROFILE" ]] && DEX_CONTAINER_PROFILE="$(cat /run/dex/profile | grep '^profile=' | cut -d= -f2-)"
+    [[ -z "$DEX_CONTAINER_GITROOT" ]] && DEX_CONTAINER_GITROOT="$(cat /run/dex/profile | grep '^gitroot=' | cut -d= -f2-)"
     export DEX_CONTAINER_PROFILE
+    export DEX_CONTAINER_GITROOT
 elif [[ -n "$DEX_CONTAINER_PROFILE" ]]; then
     DEX_DIRECT_MODE=1
 fi
@@ -248,7 +251,12 @@ find_project_config() {
         ini_parse "$conf"
         pattern="$(ini_get "$conf" "project" "pattern")"
         [[ -z "$pattern" ]] && continue
-        if [[ "$git_root" =~ $pattern ]]; then
+        if [[ -n "$DEX_CONTAINER_GITROOT" ]]; then
+            if [[ "$DEX_CONTAINER_GITROOT" =~ $pattern ]]; then
+                PROJECT_FILE="$conf"
+                return 0
+            fi
+        elif [[ "$git_root" =~ $pattern ]]; then
             PROJECT_FILE="$conf"
             return 0
         fi
@@ -498,7 +506,8 @@ ensure_container() {
     # Host-side marker file: written before docker run so the container always
     # has a readable /run/dex/profile regardless of the container's user.
     local _marker_file="${TMPDIR:-/tmp}/.dex-${container}-profile"
-    printf '%s' "$PROFILE_NAME" >"$_marker_file"
+    printf 'profile=%s\n' "$PROFILE_NAME" >"$_marker_file"
+    printf 'gitroot=%s\n' "$git_root" >>"$_marker_file"
     _cfg_mounts+=("-v" "${_marker_file}:/run/dex/profile:ro")
     if [[ -f "$GLOBAL_CONFIG" ]]; then
         _cfg_mounts+=("-v" "${GLOBAL_CONFIG}:/run/dex/global.conf:ro")
