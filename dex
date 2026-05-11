@@ -516,16 +516,6 @@ ensure_container() {
         _cfg_mounts+=("-v" "${PROJECT_CONFIG_DIR}:/run/dex/project.d:ro")
     fi
 
-    if [[ "$force_stop" == "1" ]]; then
-        if docker container inspect "$container" &>/dev/null; then
-            info "Removing container '${_CDIM}${container}${_CR}' ..."
-            docker rm -f "$container" >/dev/null
-        else
-            info "Container '${_CYL}$container${_CR}' already stopped."
-        fi
-        exit 0
-    fi
-
     # --restart: remove the existing container so it is recreated fresh (e.g.
     # to apply updated port mappings or pick up a new image).
     if [[ "$force_restart" == "1" ]] && docker container inspect "$container" &>/dev/null; then
@@ -1642,6 +1632,17 @@ fi
 # Skipped when running inside a dex container (direct mode).
 if [[ "$DEX_DIRECT_MODE" != "1" ]]; then
     ensure_image "$FINAL_IMAGE" "$EFFECTIVE_DOCKERFILE" "$FORCE_REBUILD"
+
+    if [[ "$FORCE_STOP" == "1" ]]; then
+        if docker container inspect "$CONTAINER_NAME" &>/dev/null; then
+            info "Removing container '${_CDIM}${CONTAINER_NAME}${_CR}' ..."
+            docker rm -f "$CONTAINER_NAME" >/dev/null
+        else
+            info "Container '${_CYL}$CONTAINER_NAME${_CR}' already stopped."
+        fi
+        exit 0
+    fi
+
 
     # If no alias or command was given (e.g. bare `dex -b`), the image step is all
     # that was needed — skip container creation/start entirely.
