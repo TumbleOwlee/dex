@@ -1565,6 +1565,12 @@ fi
 [[ -n "$PROFILE_OVERRIDE" ]] && PROFILE_NAME="$PROFILE_OVERRIDE"
 DEX_CONTAINER_PROFILE="$PROFILE_NAME"
 
+# ── List profiles and exit (--list-profiles / -L) ────────────────────────────
+if [[ "$LIST_PROFILES" == "1" ]]; then
+    list_profiles
+    exit 0
+fi
+
 # ── Load profile, then overlay project settings ───────────────────────────────
 load_profile "$PROFILE_NAME"
 apply_project_config "$PROFILE_NAME"
@@ -1619,12 +1625,6 @@ fi
 # ── List aliases and exit (--list / -l) ──────────────────────────────────────
 if [[ "$LIST_ALIASES" == "1" ]]; then
     list_aliases
-    exit 0
-fi
-
-# ── List profiles and exit (--list-profiles / -L) ────────────────────────────
-if [[ "$LIST_PROFILES" == "1" ]]; then
-    list_profiles
     exit 0
 fi
 
