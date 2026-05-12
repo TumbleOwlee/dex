@@ -496,6 +496,15 @@ ensure_container() {
         for _p in $ports_spec; do
             _p="${_p#"${_p%%[![:space:]]*}"}" # ltrim
             _p="${_p%"${_p##*[![:space:]]}"}" # rtrim
+
+            if [[ -n "$_p" ]]; then
+                if [[ "$_p" == *'${'* || "$_p" == *'$('* || "$_p" == *'`'* ]]; then
+                    eval "_p=${_p}"
+                else
+                    _p="$_p"
+                fi
+            fi
+
             [[ -n "$_p" ]] && _port_flags+=("-p" "$_p")
         done
     fi
@@ -1661,7 +1670,7 @@ _setup_step() {
     EXEC_WORKDIR="${ALIAS_WORKDIR[$step_alias]:-$CONTAINER_WORKDIR}"
     # Evaluate command substitutions in the workdir value, e.g.
     #   workdir = /workspace/$(git branch --show-current)
-    if [[ "$EXEC_WORKDIR" == *'$('* || "$EXEC_WORKDIR" == *'`'* ]]; then
+    if [[ "$EXEC_WORKDIR" == *'${'* || "$EXEC_WORKDIR" == *'$('* || "$EXEC_WORKDIR" == *'`'* ]]; then
         eval "EXEC_WORKDIR=${EXEC_WORKDIR}"
     fi
     EXEC_CMD="${ALIAS_CMD[$step_alias]}"
@@ -1669,7 +1678,7 @@ _setup_step() {
     local _rawuser="${ALIAS_USER[$step_alias]-}"
     EXEC_USER=""
     if [[ -n "$_rawuser" ]]; then
-        if [[ "$_rawuser" == *'$('* || "$_rawuser" == *'`'* ]]; then
+        if [[ "$_rawuser" == *'${'* || "$_rawuser" == *'$('* || "$_rawuser" == *'`'* ]]; then
             eval "EXEC_USER=${_rawuser}"
         else
             EXEC_USER="$_rawuser"
